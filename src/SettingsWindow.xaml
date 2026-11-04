@@ -960,6 +960,7 @@
                                          Margin="0,5" SelectedIndex="1" SelectionChanged="OcrMethodComboBox_SelectionChanged">
                                     <ComboBoxItem Content="Windows OCR"/>
                                     <ComboBoxItem Content="OneOCR"/>
+                                    <ComboBoxItem Content="RapidOCR (DirectML)"/>
                                 </ComboBox>
                                 <!-- HDR support -->
                                 <TextBlock Text="{Binding Source={x:Static local:LocalizationManager.Instance}, Path=Strings[Lbl_HDRSupport]}" Grid.Row="9" Grid.Column="0" 

@@ -654,6 +654,8 @@ namespace RSTGameTranslation
             _configValues[LANGUAGE_FONT_OVERRIDE] = "false";
             _configValues[LANGUAGE_FONT_SIZE_MIN] = (10).ToString(CultureInfo.InvariantCulture);
             _configValues[LANGUAGE_FONT_SIZE_MAX] = (68).ToString(CultureInfo.InvariantCulture);
+            _configValues["nearby_translation"] = "true";
+            _configValues["nearby_font_scale"] = "0.72";
             _configValues[HDR_SUPPORT] = "false";
             _configValues[LANGUAGE_INTERFACE] = "en";
             _configValues[CUSTOM_API_KEY] = "";
@@ -1505,7 +1507,7 @@ namespace RSTGameTranslation
         public void SetOcrMethod(string method)
         {
             Console.WriteLine($"ConfigManager.SetOcrMethod called with method: {method}");
-            if (method == "Windows OCR" || method == "OneOCR")
+            if (method == "Windows OCR" || method == "OneOCR" || method == RapidOCRManager.Method)
             {
                 _configValues[OCR_METHOD] = method;
                 SaveConfig();
@@ -3030,6 +3032,14 @@ namespace RSTGameTranslation
         }
 
         // OCR Display methods
+        public bool IsNearbyTranslationEnabled() => GetValue("nearby_translation", "true") == "true";
+
+        public double GetNearbyFontScale()
+        {
+            return double.TryParse(GetValue("nearby_font_scale", "0.72"),
+                NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value)
+                ? Math.Clamp(value, 0.4, 1.0) : 0.72;
+        }
 
         // Check if translation should stay onscreen until replaced
         public bool IsLeaveTranslationOnscreenEnabled()
@@ -3092,7 +3102,7 @@ namespace RSTGameTranslation
         // that already changed is dropped (it then only goes to the ChatBox history)
         public bool IsHideStaleTranslationEnabled()
         {
-            string value = GetValue(HIDE_STALE_TRANSLATION, "false");
+            string value = GetValue(HIDE_STALE_TRANSLATION, IsNearbyTranslationEnabled() ? "true" : "false");
             return value.ToLower() == "true";
         }
 

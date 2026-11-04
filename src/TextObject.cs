@@ -71,6 +71,20 @@ namespace RSTGameTranslation
         // Glow around translated text drawn directly on the erased background
         private const double TextHaloRadius = 6;
         private System.Windows.Shapes.Rectangle? _softBackground;
+        private double? _nearbyFontSize;
+        private string _nearbyMeasureSignature = "";
+        private readonly Dictionary<(double Width, double Font), Size> _nearbyMeasurements = new();
+        private string _sourceFontSignature = "";
+        private double _cachedSourceFont;
+
+        private string NearbyStyleSignature()
+        {
+            var dpi = VisualTreeHelper.GetDpi(Border);
+            return string.Join("\u001f", TextBlock.Text, TextBlock.FontFamily.Source,
+                TextBlock.FontWeight, TextBlock.FontStyle, TextBlock.FontStretch, TextBlock.FlowDirection,
+                TextBlock.Language.IetfLanguageTag, Border.Padding, Border.BorderThickness,
+                Border.MinWidth, Border.MinHeight, dpi.DpiScaleX, dpi.DpiScaleY);
+        }
 
         // Fallback chain used when no language font override is set
         private const string DefaultFontFamily = "Arial, Noto Sans SC, Noto Sans JP, Noto Sans, Noto Sans KR, Noto Sans Devanagari, MS Gothic, Malgun Gothic, Yu Gothic, Microsoft YaHei, Arial Unicode MS";
@@ -280,6 +294,19 @@ namespace RSTGameTranslation
         // user-chosen color keeps a crisp box.
         private void ApplyBackground()
         {
+            if (ConfigManager.Instance.IsNearbyTranslationEnabled())
+            {
+                Border.Background = new SolidColorBrush(Color.FromArgb(200, 18, 25, 34));
+                Border.BorderBrush = new SolidColorBrush(Color.FromRgb(102, 192, 210));
+                Border.BorderThickness = new Thickness(2, 0, 0, 0);
+                Border.Padding = new Thickness(5, 3, 5, 3);
+                if (_softBackground != null) _softBackground.Visibility = Visibility.Collapsed;
+                TextBlock.Foreground = System.Windows.Media.Brushes.White;
+                TextBlock.Effect = null;
+                return;
+            }
+            Border.BorderThickness = new Thickness(0);
+            Border.Padding = new Thickness(0);
             bool erased = EraserElement != null;
             bool soft = !erased && _softBackground != null && ConfigManager.Instance.IsAutoSetOverlayBackground();
             Border.Background = erased || soft ? null : BackgroundColor;
@@ -302,12 +329,20 @@ namespace RSTGameTranslation
 
         private void ResetLayout()
         {
+            _nearbyFontSize = null;
             LayoutWidth = Width;
             MinSourceSizeRatio = DefaultMinSourceSizeRatio;
         }
 
         private void ApplyBoxConstraints()
         {
+            if (ConfigManager.Instance.IsNearbyTranslationEnabled())
+            {
+                Border.MinWidth = Border.MinHeight = 0;
+                Border.MaxWidth = Border.MaxHeight = double.PositiveInfinity;
+                TextBlock.MaxWidth = 340;
+                return;
+            }
             if (Width > 0)
             {
                 // Cover at least the original text; wrap at the (possibly widened) layout width
@@ -347,6 +382,62 @@ namespace RSTGameTranslation
         // The translation may shrink to this fraction of the estimated source font size, no smaller
         public const double DefaultMinSourceSizeRatio = 0.6;
 
+        public double GetNearbyFontSize()
+        {
+            double max = Math.Clamp(ConfigManager.Instance.GetLanguageFontSizeMax(), 8, 22);
+            double min = Math.Clamp(ConfigManager.Instance.GetLanguageFontSizeMin(), 8, max);
+            var dpi = VisualTreeHelper.GetDpi(Border);
+            string signature = string.Join("\u001f", Text, Width, Height, TextBlock.FontFamily.Source,
+                TextBlock.FontWeight, TextBlock.FontStyle, TextBlock.FontStretch,
+                ConfigManager.Instance.GetNearbyFontScale(), min, max, dpi.DpiScaleX, dpi.DpiScaleY);
+            if (signature == _sourceFontSignature) return _cachedSourceFont;
+            var probe = new TextBlock { Text = Text, FontFamily = TextBlock.FontFamily,
+                FontWeight = TextBlock.FontWeight, TextWrapping = TextWrapping.Wrap };
+            double layout = LayoutWidth;
+            LayoutWidth = Math.Max(1, Width);
+            double sourceSize = FindLargestFittingSize(probe, 1, 100);
+            LayoutWidth = layout;
+            _sourceFontSignature = signature;
+            return _cachedSourceFont = Math.Clamp(sourceSize * ConfigManager.Instance.GetNearbyFontScale(), min, max);
+        }
+
+        public Size MeasureNearby(double width, double font)
+        {
+            ApplyFontSize(TextBlock, font);
+            TextBlock.MaxWidth = Math.Max(1, width - 12);
+            string signature = NearbyStyleSignature();
+            if (_nearbyMeasureSignature != signature)
+            {
+                _nearbyMeasurements.Clear();
+                _nearbyMeasureSignature = signature;
+            }
+            if (_nearbyMeasurements.TryGetValue((width, font), out Size measured)) return measured;
+            // Changing a child's font does not immediately invalidate its parent's
+            // cached measure during a synchronous layout search. Force this candidate
+            // to be measured before caching it, otherwise a previous font's height leaks in.
+            TextBlock.InvalidateMeasure();
+            Border.InvalidateMeasure();
+            TextBlock.Measure(new Size(Math.Max(1, width - 12), double.PositiveInfinity));
+            Border.Measure(new Size(width, double.PositiveInfinity));
+            if (_nearbyMeasurements.Count >= 128) _nearbyMeasurements.Clear();
+            return _nearbyMeasurements[(width, font)] = Border.DesiredSize;
+        }
+
+        public void PlaceNearby(NearbyPlacement placement)
+        {
+            _nearbyFontSize = placement.FontSize;
+            Border.Visibility = Visibility.Visible;
+            MeasureNearby(placement.WrapWidth, placement.FontSize);
+            // The search may finish on a cached candidate after probing other fonts.
+            // Materialize the final size once so the rendered control matches its bounds.
+            TextBlock.InvalidateMeasure();
+            Border.InvalidateMeasure();
+            TextBlock.Measure(new Size(Math.Max(1, placement.WrapWidth - 12), double.PositiveInfinity));
+            Border.Measure(new Size(placement.WrapWidth, double.PositiveInfinity));
+            Canvas.SetLeft(Border, placement.Bounds.Left);
+            Canvas.SetTop(Border, placement.Bounds.Top);
+        }
+
         private static void ApplyFontSize(TextBlock textBlock, double fontSize)
         {
             textBlock.FontSize = fontSize;
@@ -384,6 +475,11 @@ namespace RSTGameTranslation
         {
             try
             {
+                if (ConfigManager.Instance.IsNearbyTranslationEnabled())
+                {
+                    ApplyFontSize(textBlock, _nearbyFontSize ?? GetNearbyFontSize());
+                    return;
+                }
                 // Check if auto sizing is enabled
                 if (!ConfigManager.Instance.IsAutoSizeTextBlocksEnabled())
                 {

@@ -21,6 +21,7 @@ namespace RSTGameTranslation
         private int _width, _height, _originX, _originY;
         private bool _hasOcrFrame;
         private bool _hasFrame;
+        public bool IsExactMatch { get; private set; }
 
         /// <summary>
         /// Takes a copy of the frame whose top-left pixel is at (originX, originY) on screen and
@@ -28,6 +29,7 @@ namespace RSTGameTranslation
         /// </summary>
         public bool IsSameAsOcrFrame(Bitmap frame, int originX, int originY)
         {
+            IsExactMatch = false;
             _hasFrame = TryCopyPixels(frame);
             _originX = originX;
             _originY = originY;
@@ -41,7 +43,10 @@ namespace RSTGameTranslation
             ReadOnlySpan<byte> current = _frame.AsSpan(0, length);
             ReadOnlySpan<byte> ocr = _ocrFrame.AsSpan(0, length);
             if (current.SequenceEqual(ocr))
+            {
+                IsExactMatch = true;
                 return true;
+            }
 
             // BGRA: compare the colour channels, alpha is always opaque on a screen capture
             for (int i = 0; i < length; i += 4)
@@ -87,10 +92,13 @@ namespace RSTGameTranslation
                 BitmapData data = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
                 try
                 {
-                    for (int y = 0; y < height; y++)
+                    if (data.Stride == rowBytes)
                     {
-                        Marshal.Copy(data.Scan0 + y * data.Stride, _frame, y * rowBytes, rowBytes);
+                        Marshal.Copy(data.Scan0, _frame, 0, rowBytes * height);
                     }
+                    else
+                        for (int y = 0; y < height; y++)
+                            Marshal.Copy(data.Scan0 + y * data.Stride, _frame, y * rowBytes, rowBytes);
                 }
                 finally
                 {

@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup><RstReleaseDir Condition="'$(RstReleaseDir)' == ''">$(MSBuildThisFileDirectory)app</RstReleaseDir></PropertyGroup><PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>rst</AssemblyName>
+    <OutputPath>$(MSBuildThisFileDirectory)artifacts\local\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <RootNamespace>WPFScreenCapture</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <ApplicationIcon>media\AppIcon.ico</ApplicationIcon>
+    <PublishSingleFile>false</PublishSingleFile>
+    <ApplicationManifest>app.local.manifest</ApplicationManifest>
+
+    
+    <Version>4.6.0</Version>
+    <FileVersion>4.6.0.0</FileVersion>
+    <AssemblyVersion>4.6.0.0</AssemblyVersion>
+    <Company>RSTGameTranslation</Company>
+    <Product>RST Game Translation</Product>
+    <Authors>RSTGameTranslation</Authors>
+    <Description>Real-time game screen OCR and translation tool</Description>
+    <AssemblyTitle>RST Game Translation</AssemblyTitle>
+    <Copyright>Copyright © 2024-2026 RSTGameTranslation. All rights reserved.</Copyright>
+
+    
+    
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+
+    
+    <Deterministic>true</Deterministic>
+
+    
+    <PublishTrimmed>false</PublishTrimmed>
+  <AllowUnsafeBlocks>true</AllowUnsafeBlocks><EnableDefaultNoneItems>false</EnableDefaultNoneItems><OutputPath>$(MSBuildThisFileDirectory)artifacts\local\</OutputPath></PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <AssemblyName>rst_debug</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    </ItemGroup>
+  
+  <ItemGroup>
+    <Compile Include="src\**\*.cs" />
+    <None Remove="src\**\*.xaml" />
+    <ApplicationDefinition Include="src\App.xaml" />
+    <Page Include="src\**\*.xaml" Exclude="src\App.xaml" />
+    <None Include="app.manifest" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Resource Include="media\AppIcon.ico" />
+    <Resource Include="media\donate_qr.png" />
+  </ItemGroup>
+
+<ItemGroup><Reference Include="Hardcodet.NotifyIcon.Wpf"><HintPath>$(RstReleaseDir)\Hardcodet.NotifyIcon.Wpf.dll</HintPath></Reference><Reference Include="Microsoft.ML.OnnxRuntime"><HintPath>$(RstReleaseDir)\Microsoft.ML.OnnxRuntime.dll</HintPath></Reference><Reference Include="Microsoft.Windows.SDK.NET"><HintPath>$(RstReleaseDir)\Microsoft.Windows.SDK.NET.dll</HintPath></Reference><Reference Include="WinRT.Runtime"><HintPath>$(RstReleaseDir)\WinRT.Runtime.dll</HintPath></Reference><Reference Include="NAudio.Asio"><HintPath>$(RstReleaseDir)\NAudio.Asio.dll</HintPath></Reference><Reference Include="NAudio.Core"><HintPath>$(RstReleaseDir)\NAudio.Core.dll</HintPath></Reference><Reference Include="NAudio"><HintPath>$(RstReleaseDir)\NAudio.dll</HintPath></Reference><Reference Include="NAudio.Midi"><HintPath>$(RstReleaseDir)\NAudio.Midi.dll</HintPath></Reference><Reference Include="NAudio.Wasapi"><HintPath>$(RstReleaseDir)\NAudio.Wasapi.dll</HintPath></Reference><Reference Include="NAudio.WinForms"><HintPath>$(RstReleaseDir)\NAudio.WinForms.dll</HintPath></Reference><Reference Include="NAudio.WinMM"><HintPath>$(RstReleaseDir)\NAudio.WinMM.dll</HintPath></Reference><Reference Include="Newtonsoft.Json"><HintPath>$(RstReleaseDir)\Newtonsoft.Json.dll</HintPath></Reference><Reference Include="sherpa-onnx"><HintPath>$(RstReleaseDir)\sherpa-onnx.dll</HintPath></Reference><Reference Include="System.Management"><HintPath>$(RstReleaseDir)\System.Management.dll</HintPath></Reference><Reference Include="System.Speech"><HintPath>$(RstReleaseDir)\System.Speech.dll</HintPath></Reference><Reference Include="Whisper.net"><HintPath>$(RstReleaseDir)\Whisper.net.dll</HintPath></Reference><Reference Include="Microsoft.Extensions.AI.Abstractions"><HintPath>$(RstReleaseDir)\Microsoft.Extensions.AI.Abstractions.dll</HintPath></Reference></ItemGroup></Project>

@@ -1,3 +1,6 @@
+> **GPU OCR / 实时链路优化分支**：本分支增加 RapidOCR + DirectML、Ollama `||` 批量翻译、过期任务取消和原文附近的小号译文布局。
+> [安装与使用](docs/gpu-ocr/README.md) · [验证与测量](docs/gpu-ocr/BENCHMARKS.md)。基于上游 `d39f45d`，保留原项目及许可证。
+
 <div align="center">
 
 # 🎮 RSTGameTranslation

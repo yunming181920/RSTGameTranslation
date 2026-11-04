@@ -174,6 +174,8 @@ namespace RSTGameTranslation
 
         public void ResetHash()
         {
+            CancelPendingTranslations();
+            _lastRawOcrData = null;
             _lastOcrHash = "";
             _lastTextContent = string.Empty;
             _lastChangeTime = DateTime.Now;
@@ -403,7 +405,18 @@ namespace RSTGameTranslation
         }
 
         //! Process the OCR text data, this is before it's been translated
-        public void ProcessReceivedTextJsonData(string data)
+        private string? _lastRawOcrData;
+
+        public void InvalidateOcrReuse() => _lastRawOcrData = null;
+
+        public bool TryReuseOcrResult()
+        {
+            if (_lastRawOcrData == null) return false;
+            ProcessReceivedTextJsonData(_lastRawOcrData, reused: true);
+            return true;
+        }
+
+        public void ProcessReceivedTextJsonData(string data, bool reused = false)
         {
             _ocrProcessingStopwatch.Restart();
             MainWindow.Instance.SetOCRCheckIsWanted(true);
@@ -441,6 +454,7 @@ namespace RSTGameTranslation
 
                             if (status == "success" && root.TryGetProperty("results", out JsonElement resultsElement))
                             {
+                                if (!reused) _lastRawOcrData = data;
                                 // Pre-filter low-confidence characters before block detection
                                 JsonElement filteredResults = FilterLowConfidenceCharacters(resultsElement);
 
@@ -459,7 +473,8 @@ namespace RSTGameTranslation
                                 {
                                     // Still the text being translated (or close to it): let that translation finish
                                     if (contentHash == _lastOcrHash ||
-                                        IsTextSimilar(textContent, _lastTextContent, ConfigManager.Instance.GetTextSimilarThreshold(), out _))
+                                        (!TextGrowth.IsGrowth(_lastTextContent, textContent) &&
+                                         IsTextSimilar(textContent, _lastTextContent, ConfigManager.Instance.GetTextSimilarThreshold(), out _)))
                                     {
                                         Console.WriteLine("Skipping OCR results - waiting for translation to finish");
                                         return;
@@ -516,6 +531,7 @@ namespace RSTGameTranslation
                                         _lastOcrHash = contentHash;
                                         _lastTextContent = textContent;
                                         _lastSkipLoggedText = string.Empty;
+                                        CancelObsoletePrefetch(modifiedResults);
                                         // An empty frame (text disappeared) has nothing to time or translate
                                         if (!string.IsNullOrWhiteSpace(textContent))
                                         {
@@ -1245,7 +1261,8 @@ namespace RSTGameTranslation
                 Color bgColor = ConfigManager.Instance.GetOverlayBackgroundColor();
                 System.Windows.Media.Imaging.BitmapSource? erasedPatch = null;
                 Rect erasedBounds = Rect.Empty;
-                if (ConfigManager.Instance.IsAutoSetOverlayBackground() && sourceBitmap != null)
+                if (ConfigManager.Instance.IsAutoSetOverlayBackground() && sourceBitmap != null &&
+                    !ConfigManager.Instance.IsNearbyTranslationEnabled())
                 {
                     try
                     {
@@ -1808,9 +1825,30 @@ namespace RSTGameTranslation
             }
         }
 
+        public async void ProcessWithRapidOCR(System.Drawing.Bitmap bitmap)
+        {
+            try
+            {
+                var manager = RapidOCRManager.Instance;
+                // Encoding, pipe writes and result parsing must not block the WPF dispatcher.
+                await Task.Run(() => manager.ProcessAsync(bitmap));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"RapidOCR error: {ex}");
+                MainWindow.Instance.SetStatus($"RapidOCR: {ex.Message}");
+            }
+            finally
+            {
+                bitmap.Dispose();
+                MainWindow.Instance.SetOCRCheckIsWanted(true);
+            }
+        }
+
         // Called when the application is closing
         public void Finish()
         {
+            CancelPendingTranslations();
             try
             {
                 // Clean up resources
@@ -2180,6 +2218,9 @@ namespace RSTGameTranslation
         // canBeSuperseded: an OCR translation, dropped if the screen text changes before it is done
         public async Task TranslateTextObjectsAsync(bool canBeSuperseded = false)
         {
+            using var cancellation = new CancellationTokenSource();
+            _translationCancellation = cancellation;
+            var cancellationToken = cancellation.Token;
             int generation = _translationGeneration;
             _translationCanBeSuperseded = canBeSuperseded;
             bool IsSuperseded() => generation != _translationGeneration;
@@ -2236,7 +2277,7 @@ namespace RSTGameTranslation
                 if (readCache)
                 {
                     // The same text is already being translated in the background: use that result instead of a second request
-                    await WaitForMatchingPrefetchAsync();
+                    await WaitForMatchingPrefetchAsync(cancellationToken);
                     if (IsSuperseded())
                         return;
                 }
@@ -2259,14 +2300,14 @@ namespace RSTGameTranslation
                     // the translations of the others
                     async Task<bool> TranslateBatchAsync(List<TextObject> batch)
                     {
-                        await concurrency.WaitAsync();
+                        await concurrency.WaitAsync(cancellationToken);
                         try
                         {
                             var payload = batch.Select(t => (object)new { id = t.ID, text = t.Text }).ToList();
                             string jsonToTranslate = BuildTranslationRequestJson(payload, previousContext, gameInfo);
                             LogManager.Instance.LogLlmRequest(prompt, jsonToTranslate);
 
-                            string? translationResponse = await translationService.TranslateAsync(jsonToTranslate, prompt);
+                            string? translationResponse = await translationService.TranslateAsync(jsonToTranslate, prompt, cancellationToken);
                             if (string.IsNullOrEmpty(translationResponse))
                             {
                                 Console.WriteLine($"Translation failed with {currentService} for {batch.Count} block(s) - empty response");
@@ -2312,7 +2353,7 @@ namespace RSTGameTranslation
                         LogManager.Instance.LogLlmRequest(prompt, jsonToTranslate);
 
                         LogTranslationRequest(currentService, currentModel, blocks, 1, cachedObjects.Count);
-                        string? translationResponse = await translationService.TranslateAsync(jsonToTranslate, prompt);
+                        string? translationResponse = await translationService.TranslateAsync(jsonToTranslate, prompt, cancellationToken);
                         OcrTiming.Log("4. Translation received", $"{requestStopwatch.ElapsedMilliseconds} ms");
 
                         if (IsSuperseded())
@@ -2394,6 +2435,11 @@ namespace RSTGameTranslation
                 }
 
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                if (!IsSuperseded()) OnFinishedThings(true);
+                return;
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error translating text objects: {ex.Message}");
@@ -2403,6 +2449,10 @@ namespace RSTGameTranslation
                 OnboardingTips.OnTranslationResult(ConfigManager.Instance.GetCurrentTranslationService(), false);
                 OnFinishedThings(true);
             }
+            finally
+            {
+                if (ReferenceEquals(_translationCancellation, cancellation)) _translationCancellation = null;
+            }
 
             //all done
             OnFinishedThings(true);
@@ -2411,15 +2461,24 @@ namespace RSTGameTranslation
         // Set when the user asks to retry, so that one translation goes to the service even if cached
         private bool _bypassTranslationCacheOnce;
 
-        // Bumped when the screen text changes while an OCR translation is in flight: that translation is then
-        // dropped (its result only fills the cache) and the new text is translated without waiting for it
+        // Bumped when OCR text changes. The old HTTP/model request is cancelled;
+        // completed responses racing cancellation are still rejected by generation.
         private int _translationGeneration;
         private bool _translationCanBeSuperseded;
+        private CancellationTokenSource? _translationCancellation;
+
+        public void CancelPendingTranslations()
+        {
+            _translationGeneration++;
+            try { _translationCancellation?.Cancel(); }
+            catch (ObjectDisposedException) { }
+            CancelPrefetch();
+            SetWaitingForTranslationToFinish(false);
+        }
 
         private void SupersedeTranslationInFlight()
         {
-            _translationGeneration++;
-            SetWaitingForTranslationToFinish(false);
+            CancelPendingTranslations();
             Console.WriteLine("Screen text changed while translating; dropping that translation");
         }
 
@@ -2464,7 +2523,8 @@ namespace RSTGameTranslation
 
         // Settings that change a translation: a cached one is only reused under the same settings
         private string BuildTranslationCacheContext(string service, string model, string prompt, string gameInfo) =>
-            string.Join("\u001F", service, model, GetSourceLanguage(), GetTargetLanguage(), prompt, gameInfo);
+            string.Join("\u001F", service, model, GetSourceLanguage(), GetTargetLanguage(), prompt, gameInfo,
+                service == "Ollama" ? OllamaTranslationService.ProxyPromptRevision : "");
 
         // ----- Prefetch: translate new text while waiting for it to settle -----
         // When OCR sees new text the pipeline waits for the next OCR pass to confirm it (the settle time,
@@ -2474,6 +2534,19 @@ namespace RSTGameTranslation
         // a request. One prefetch runs at a time.
         private Task? _prefetchTask;
         private List<string>? _prefetchTexts;
+        private CancellationTokenSource? _prefetchCancellation;
+
+        private void CancelPrefetch()
+        {
+            try { _prefetchCancellation?.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        private void CancelObsoletePrefetch(JsonElement results)
+        {
+            if (_prefetchTask is { IsCompleted: false } && _prefetchTexts != null &&
+                !_prefetchTexts.SequenceEqual(GetTranslatableTexts(results))) CancelPrefetch();
+        }
 
         private void StartTranslationPrefetch(JsonElement results)
         {
@@ -2483,13 +2556,18 @@ namespace RSTGameTranslation
                     !ConfigManager.Instance.IsTranslationCacheEnabled() ||
                     !MainWindow.Instance.GetIsStarted() ||
                     !MainWindow.Instance.GetTranslateEnabled() ||
-                    GetWaitingForTranslationToFinish() ||
-                    _prefetchTask is { IsCompleted: false })
+                    GetWaitingForTranslationToFinish())
                     return;
 
                 List<string> texts = GetTranslatableTexts(results);
                 if (texts.Count == 0)
                     return;
+                if (_prefetchTask is { IsCompleted: false })
+                {
+                    if (_prefetchTexts != null && _prefetchTexts.SequenceEqual(texts) &&
+                        _prefetchCancellation is { IsCancellationRequested: false }) return;
+                    CancelPrefetch();
+                }
 
                 string service = ConfigManager.Instance.GetCurrentTranslationService();
                 string model = ConfigManager.Instance.GetCurrentTranslationModel();
@@ -2512,7 +2590,13 @@ namespace RSTGameTranslation
                 bool idTagged = mangaMode || !UsesCombinedTranslationRequest(service);
                 var previousContext = GetPreviousContext();
                 _prefetchTexts = texts;
-                _prefetchTask = Task.Run(() => PrefetchTranslationsAsync(texts, idTagged, prompt, gameInfo, previousContext, cacheContext));
+                var cancellation = new CancellationTokenSource();
+                _prefetchCancellation = cancellation;
+                _prefetchTask = Task.Run(async () =>
+                {
+                    try { await PrefetchTranslationsAsync(texts, idTagged, prompt, gameInfo, previousContext, cacheContext, cancellation.Token); }
+                    finally { cancellation.Dispose(); }
+                });
             }
             catch (Exception ex)
             {
@@ -2521,7 +2605,7 @@ namespace RSTGameTranslation
         }
 
         private async Task PrefetchTranslationsAsync(List<string> texts, bool idTagged, string prompt, string gameInfo,
-                                                     List<string> previousContext, string cacheContext)
+                                                     List<string> previousContext, string cacheContext, CancellationToken cancellationToken)
         {
             var stopwatch = Stopwatch.StartNew();
             try
@@ -2539,7 +2623,8 @@ namespace RSTGameTranslation
                     var payload = missing.Select((t, i) => (object)new { id = "prefetch_" + i, text = t }).ToList();
                     OcrTiming.Log("2a. Prefetch request", $"{missing.Count} block(s)");
 
-                    string? response = await translationService.TranslateAsync(BuildTranslationRequestJson(payload, previousContext, gameInfo), prompt);
+                    string? response = await translationService.TranslateAsync(BuildTranslationRequestJson(payload, previousContext, gameInfo), prompt, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     var translations = string.IsNullOrEmpty(response) ? new Dictionary<string, string>() : ParseTranslationsById(response);
                     for (int i = 0; i < missing.Count; i++)
                     {
@@ -2556,7 +2641,8 @@ namespace RSTGameTranslation
                     var payload = new List<object> { new { id = "999", text = string.Join("##|||##", missing) } };
                     OcrTiming.Log("2a. Prefetch request", $"{missing.Count} block(s) combined");
 
-                    string? response = await translationService.TranslateAsync(BuildTranslationRequestJson(payload, previousContext, gameInfo), prompt);
+                    string? response = await translationService.TranslateAsync(BuildTranslationRequestJson(payload, previousContext, gameInfo), prompt, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     var translations = string.IsNullOrEmpty(response) ? new Dictionary<string, string>() : ParseTranslationsById(response);
                     if (translations.TryGetValue("999", out string? combined))
                     {
@@ -2575,6 +2661,10 @@ namespace RSTGameTranslation
 
                 OcrTiming.Log("2b. Prefetch done", $"{stopwatch.ElapsedMilliseconds} ms, {stored} translation(s) cached");
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Console.WriteLine("Translation prefetch superseded");
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Translation prefetch failed: {ex.Message}");
@@ -2583,7 +2673,7 @@ namespace RSTGameTranslation
 
         // If a prefetch for exactly the current text is still running, wait for it so its result is
         // used instead of sending the same request again
-        private async Task WaitForMatchingPrefetchAsync()
+        private async Task WaitForMatchingPrefetchAsync(CancellationToken cancellationToken)
         {
             var task = _prefetchTask;
             var texts = _prefetchTexts;
@@ -2594,12 +2684,13 @@ namespace RSTGameTranslation
             OcrTiming.Log("3a. Waiting for the prefetch of this text");
             try
             {
-                await task;
+                await task.WaitAsync(cancellationToken);
             }
             catch (Exception)
             {
                 // A failed prefetch just means the normal request goes out
             }
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         // The same post-processing the normal path applies before it stores a translation, so a

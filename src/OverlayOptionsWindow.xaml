@@ -60,6 +60,17 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+                <GroupBox Header="译文布局" Margin="0,5,0,10" Padding="8">
+                    <StackPanel>
+                        <CheckBox x:Name="nearbyTranslationCheckBox" Content="保留原文，在附近显示小号译文" Margin="0,4"/>
+                        <TextBlock Text="自动选择下方、上方或两侧；多行译文自动换行并避让。" TextWrapping="Wrap" Margin="0,5"/>
+                        <TextBlock Text="旁注字号上限为 22；取消勾选可恢复原位覆盖。" TextWrapping="Wrap" Margin="0,2,0,5"/>
+                        <DockPanel Margin="0,5">
+                            <TextBlock Text="原文字号比例（40～100%）：" Width="200" VerticalAlignment="Center"/>
+                            <TextBox x:Name="nearbyFontScaleTextBox" Text="72"/>
+                        </DockPanel>
+                    </StackPanel>
+                </GroupBox>
                 <!-- Background settings -->
                 <GroupBox Header="{Binding Source={x:Static local:LocalizationManager.Instance}, Path=Strings[OverlayOptions_Grp_Background]}" Margin="0,5,0,10" Padding="5">
                     <StackPanel>

@@ -82,8 +82,9 @@ namespace RSTGameTranslation
             {
                 if (context != _context)
                     return;
+                // Monitor locks are reentrant: keep context check and insertion atomic.
+                Set(text, translation);
             }
-            Set(text, translation);
         }
 
         public string Context

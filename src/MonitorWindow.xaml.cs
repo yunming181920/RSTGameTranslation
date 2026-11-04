@@ -496,7 +496,8 @@ namespace RSTGameTranslation
                 // but we'll use the existing Border and TextBlock references so updates work
                 // Erased original background goes underneath every translation (index 0), so a translation
                 // that grows or is pushed over another box's original text never shows that text
-                if (textObject.EraserElement != null && textObject.TextBlock != null && textObject.EraserElement.Parent == null)
+                if (!ConfigManager.Instance.IsNearbyTranslationEnabled() &&
+                    textObject.EraserElement != null && textObject.TextBlock != null && textObject.EraserElement.Parent == null)
                 {
                     textObject.PositionEraser();
                     textOverlayCanvas.Children.Insert(0, textObject.EraserElement);
@@ -620,6 +621,26 @@ namespace RSTGameTranslation
             }
         }
 
+        private int _captureOffsetPixelsX, _captureOffsetPixelsY;
+        private double _captureOffsetX, _captureOffsetY;
+
+        public void SetCaptureOffset(int x, int y)
+        {
+            if (_captureOffsetPixelsX == x && _captureOffsetPixelsY == y) return;
+            _captureOffsetPixelsX = x;
+            _captureOffsetPixelsY = y;
+            ApplyCaptureOffset();
+            RefreshOverlays();
+        }
+
+        private void ApplyCaptureOffset()
+        {
+            DpiHelper.GetWindowRenderDpi(this, out double sx, out double sy);
+            _captureOffsetX = _captureOffsetPixelsX / sx;
+            _captureOffsetY = _captureOffsetPixelsY / sy;
+            textOverlayCanvas.RenderTransform = new TranslateTransform(_captureOffsetX, _captureOffsetY);
+        }
+
         // Space kept between overlay boxes when widening or pushing them apart
         private const double OverlayGap = 2;
         // Last-resort minimum font size (fraction of the source size) for boxes pushed past the bottom edge
@@ -639,6 +660,12 @@ namespace RSTGameTranslation
                     .OrderBy(t => t.Y).ThenBy(t => t.X)
                     .ToList();
                 if (items.Count == 0) return;
+
+                if (ConfigManager.Instance.IsNearbyTranslationEnabled())
+                {
+                    ResolveNearbyTranslations(textObjects, items);
+                    return;
+                }
 
                 double overlayWidth = ActualWidth > 0 ? ActualWidth : double.PositiveInfinity;
                 double overlayHeight = ActualHeight > 0 ? ActualHeight : double.PositiveInfinity;
@@ -694,6 +721,60 @@ namespace RSTGameTranslation
             catch (Exception ex)
             {
                 Console.WriteLine($"Error resolving overlay collisions: {ex.Message}");
+            }
+        }
+
+        private void ResolveNearbyTranslations(IReadOnlyList<TextObject> textObjects, List<TextObject> items)
+        {
+            double width = ActualWidth;
+            double height = ActualHeight;
+            if (width <= 0 || height <= 0) return;
+            var sources = textObjects.Where(t => t.Width > 0 && t.Height > 0)
+                .Select(t => new Rect(t.X, t.Y, t.Width, t.Height)).ToList();
+            var labels = new List<NearbyLabel>();
+            foreach (var item in items)
+            {
+                item.Border.Visibility = Visibility.Visible; // WPF cannot measure a collapsed element.
+                if (string.IsNullOrWhiteSpace(item.TextTranslated))
+                {
+                    item.Border.Visibility = Visibility.Collapsed;
+                    continue;
+                }
+                double font = item.GetNearbyFontSize();
+                double min = Math.Min(font, Math.Max(8, ConfigManager.Instance.GetLanguageFontSizeMin()));
+                labels.Add(new NearbyLabel(item.ID, new Rect(item.X, item.Y, item.Width, item.Height),
+                    font, min, item.MeasureNearby));
+            }
+            ApplyCaptureOffset();
+            var placements = NearbyOverlayLayout.Arrange(new Rect(-_captureOffsetX, -_captureOffsetY, width, height), sources, labels);
+            var byId = placements.ToDictionary(p => p.Id);
+            foreach (var item in items)
+            {
+                if (!byId.TryGetValue(item.ID, out var placement))
+                {
+                    item.Border.Visibility = Visibility.Collapsed;
+                    continue;
+                }
+                item.PlaceNearby(placement);
+                // A short connector identifies the source when a label must move further away.
+                Rect source = new Rect(item.X, item.Y, item.Width, item.Height);
+                var box = placement.Bounds;
+                var start = new System.Windows.Point(Math.Clamp(box.Left + box.Width / 2, source.Left, source.Right),
+                    box.Top >= source.Bottom ? source.Bottom : box.Bottom <= source.Top ? source.Top : source.Top + source.Height / 2);
+                var end = new System.Windows.Point(Math.Clamp(start.X, box.Left, box.Right),
+                    Math.Clamp(start.Y, box.Top, box.Bottom));
+                var segment = new System.Windows.Media.LineGeometry(start, end);
+                var stroke = segment.GetWidenedPathGeometry(new System.Windows.Media.Pen(System.Windows.Media.Brushes.White, 2));
+                bool blocked = sources.Where(r => r != source).Concat(placements.Where(p => p.Id != item.ID).Select(p => p.Bounds))
+                    .Any(r => stroke.FillContainsWithDetail(new System.Windows.Media.RectangleGeometry(r)) !=
+                              System.Windows.Media.IntersectionDetail.Empty);
+                if (!blocked)
+                {
+                    var line = new System.Windows.Shapes.Path { Data = segment,
+                        Stroke = new SolidColorBrush(System.Windows.Media.Color.FromArgb(170, 102, 192, 210)),
+                        StrokeThickness = 1, IsHitTestVisible = false };
+                    textOverlayCanvas.Children.Insert(0, line);
+                }
             }
         }
 
@@ -766,8 +847,8 @@ namespace RSTGameTranslation
                     };
 
                     // Calculate position - convert from screen coordinates (physical) to canvas coordinates (logical)
-                    double canvasX = (region.X - physLeft) / dpiScaleX;
-                    double canvasY = (region.Y - physTop) / dpiScaleY;
+                    double canvasX = (region.X - physLeft) / dpiScaleX - _captureOffsetX;
+                    double canvasY = (region.Y - physTop) / dpiScaleY - _captureOffsetY;
 
                     // Position the rectangle on the canvas
                     Canvas.SetLeft(excludeRect, canvasX);

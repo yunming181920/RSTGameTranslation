@@ -418,3 +418,20 @@ ocrstuff*/
 mockups/*
 docs/*
 .vscode/*
+# Local GPU runtime, model downloads and benchmark output
+/gpu_ocr/python/
+/gpu_ocr/site-packages/
+/gpu_ocr/.venv/
+/gpu_ocr/models/
+/gpu_ocr/results/
+/gpu_ocr/logs/
+/tests/artifacts/
+/profile_output/
+__pycache__/
+*.pyc
+*.onnx
+*.gguf
+/config.txt
+/last_ocr_response.json
+/last_llm_request_sent.txt
+/last_llm_reply_received.txt

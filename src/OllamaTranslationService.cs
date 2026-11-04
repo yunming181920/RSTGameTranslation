@@ -12,6 +12,19 @@ namespace RSTGameTranslation
         // Shared across instances (a new service is created per translation) so connections are reused.
         // Local models can be slow, hence the long timeout.
         private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+        private static readonly HttpClient _cancelClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        internal const string ProxyPromptRevision = "ja-game-strict-v2";
+
+        private static async Task CancelProxyRequestAsync(string endpoint, string requestId)
+        {
+            try
+            {
+                var uri = new Uri(new Uri(endpoint), "/rst/cancel");
+                using var content = new StringContent(JsonSerializer.Serialize(new { request_id = requestId }), Encoding.UTF8, "application/json");
+                using var response = await _cancelClient.PostAsync(uri, content).ConfigureAwait(false);
+            }
+            catch (Exception ex) { Console.WriteLine("[Translation cancellation] " + ex.Message); }
+        }
 
         /// <summary>
         /// Load the configured model into memory before the first translation. A request with a
@@ -34,8 +47,13 @@ namespace RSTGameTranslation
         /// <param name="jsonData">The JSON data to translate</param>
         /// <param name="prompt">The prompt to guide the translation</param>
         /// <returns>The translation result formatted to match Gemini's response structure</returns>
-        public async Task<string?> TranslateAsync(string jsonData, string prompt)
+        public Task<string?> TranslateAsync(string jsonData, string prompt) => TranslateAsync(jsonData, prompt, CancellationToken.None);
+
+        public async Task<string?> TranslateAsync(string jsonData, string prompt, CancellationToken cancellationToken)
         {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(45));
+            CancellationToken token = deadline.Token;
             try
             {
                 // Get the Ollama API endpoint and model from config
@@ -43,12 +61,16 @@ namespace RSTGameTranslation
                 string ollamaModel = ConfigManager.Instance.GetOllamaModel();
                 
                 // Create Ollama API request
+                string requestId = Guid.NewGuid().ToString("N");
+                var endpointUri = new Uri(ollamaEndpoint);
+                bool rstProxy = endpointUri.IsLoopback && endpointUri.Port == 11434;
                 var requestContent = new
                 {
                     model = ollamaModel, // Use model from config
                     prompt = $"{prompt}\n{jsonData}",
                     stream = false,
                     keep_alive = "30m", // Keep the model loaded between translations (default unloads after 5 min idle)
+                    _rst = rstProxy ? new { request_id = requestId, prompt_revision = ProxyPromptRevision } : null,
                     options = new
                     {
                         temperature = ConfigManager.Instance.GetOllamaTemperature(),
@@ -63,15 +85,18 @@ namespace RSTGameTranslation
                     Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
                 string requestJson = JsonSerializer.Serialize(requestContent, jsonOptions);
-                var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+                using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+                using var cancellation = token.Register(() => { if (rstProxy) _ = CancelProxyRequestAsync(ollamaEndpoint, requestId); });
                 
                 Console.WriteLine($"Sending request to Ollama API at: {ollamaEndpoint}");
                 
-                HttpResponseMessage response = await _httpClient.PostAsync(ollamaEndpoint, content);
+                using HttpResponseMessage response = await _httpClient.PostAsync(ollamaEndpoint, content, token);
+                token.ThrowIfCancellationRequested();
                 
                 if (response.IsSuccessStatusCode)
                 {
-                    string jsonResponse = await response.Content.ReadAsStringAsync();
+                    string jsonResponse = await response.Content.ReadAsStringAsync(token);
+                    token.ThrowIfCancellationRequested();
                     TranslationErrorNotifier.Reset("Ollama");
                     
                     // Log the raw Ollama response before any processing
@@ -220,6 +245,11 @@ namespace RSTGameTranslation
                     
                     return null;
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // A screen change is expected, and must not open an API error dialog.
+                throw;
             }
             catch (Exception ex)
             {

@@ -76,6 +76,8 @@ namespace RSTGameTranslation
                 _currentFontOverrideEnabled = _originalFontOverrideEnabled;
                 _currentFontSizeMin = _originalFontSizeMin;
                 _currentFontSizeMax = _originalFontSizeMax;
+                nearbyTranslationCheckBox.IsChecked = ConfigManager.Instance.IsNearbyTranslationEnabled();
+                nearbyFontScaleTextBox.Text = (ConfigManager.Instance.GetNearbyFontScale() * 100).ToString(CultureInfo.InvariantCulture);
             }
             catch (Exception ex)
             {
@@ -95,6 +97,8 @@ namespace RSTGameTranslation
             _currentFontOverrideEnabled = DEFAULT_FONT_OVERRIDE;
             _currentFontSizeMin = DEFAULT_FONT_SIZE_MIN;
             _currentFontSizeMax = DEFAULT_FONT_SIZE_MAX;
+            nearbyTranslationCheckBox.IsChecked = true;
+            nearbyFontScaleTextBox.Text = "72";
         }
 
         private void UpdateUIFromSettings()
@@ -215,6 +219,14 @@ namespace RSTGameTranslation
                     return;
                 }
 
+                if (!double.TryParse(nearbyFontScaleTextBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double nearbyScale)
+                    || !double.IsFinite(nearbyScale) || nearbyScale < 40 || nearbyScale > 100)
+                {
+                    MessageBox.Show("字号比例请填写 40～100。", "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                ConfigManager.Instance.SetValue("nearby_translation", nearbyTranslationCheckBox.IsChecked == true ? "true" : "false");
+                ConfigManager.Instance.SetValue("nearby_font_scale", (nearbyScale / 100).ToString(CultureInfo.InvariantCulture));
                 // Save settings to config
                 ConfigManager.Instance.SetValue(ConfigManager.OVERLAY_BACKGROUND_COLOR, ColorToHexString(
                     Color.FromArgb(255, _currentBackgroundColor.R, _currentBackgroundColor.G, _currentBackgroundColor.B)));
@@ -236,6 +248,7 @@ namespace RSTGameTranslation
                     textObj.UpdateUIElement();
                 }
                 MonitorWindow.Instance.RefreshOverlays();
+                Logic.Instance.ResetHash();
 
                 // Close the window
                 this.DialogResult = true;

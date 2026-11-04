@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -100,6 +100,8 @@ namespace RSTGameTranslation
         private readonly FrameChangeDetector _frameChangeDetector = new FrameChangeDetector();
         private DateTime _lastOcrStartTime = DateTime.MinValue;
         private static readonly TimeSpan UnchangedFrameMaxSkip = TimeSpan.FromSeconds(2);
+        private string _lastOcrMethod = "";
+        private string _lastOcrLanguage = "";
         private WindowInteropHelper helper;
         private System.Drawing.Rectangle captureRect;
 
@@ -334,11 +336,23 @@ namespace RSTGameTranslation
 
             // Setup timer for continuous capture
             _captureTimer = new DispatcherTimer();
-            _captureTimer.Interval = TimeSpan.FromSeconds(0.25);
+            _captureTimer.Interval = TimeSpan.FromMilliseconds(125);
             _captureTimer.Tick += OnUpdateTick;
             _captureTimer.Start();
 
             // Initial update of capture rectangle and setup after window is loaded
+            this.Loaded += (_, _) =>
+            {
+                if (ConfigManager.Instance.GetOcrMethod() != RapidOCRManager.Method) return;
+                // Initialize the singleton on the dispatcher; load DirectML in the background
+                // while the user chooses a game/window, ahead of the first captured line.
+                var manager = RapidOCRManager.Instance;
+                _ = Task.Run(async () =>
+                {
+                    try { await manager.WarmUpAsync(); }
+                    catch (Exception ex) { Console.WriteLine("[WarmUp] RapidOCR: " + ex.Message); }
+                });
+            };
             this.Loaded += MainWindow_Loaded;
             if (isForceUpdatePrompt > ConfigManager.Instance.GetForceUpdatePrompt())
             {
@@ -683,13 +697,23 @@ namespace RSTGameTranslation
             // read the same text again. It still re-reads now and then, in case a setting that shapes
             // the result (language, ignore phrases, ...) changed meanwhile.
             bool sameFrame = _frameChangeDetector.IsSameAsOcrFrame(image, originX, originY);
-            if (sameFrame && ConfigManager.Instance.IsAutoOCREnabled() && Logic.Instance.IsOcrResultSettled
+            string ocrMethod = GetSelectedOcrMethod();
+            string ocrLanguage = ConfigManager.Instance.GetSourceLanguage();
+            bool sameOcrSettings = _lastOcrMethod == ocrMethod && _lastOcrLanguage == ocrLanguage;
+            if (sameFrame && sameOcrSettings && ConfigManager.Instance.IsAutoOCREnabled() && Logic.Instance.IsOcrResultSettled
                 && DateTime.UtcNow - _lastOcrStartTime < UnchangedFrameMaxSkip)
             {
                 return;
             }
+            if (_frameChangeDetector.IsExactMatch && sameOcrSettings && ConfigManager.Instance.IsAutoOCREnabled()
+                && !Logic.Instance.IsOcrResultSettled && DateTime.UtcNow - _lastOcrStartTime < UnchangedFrameMaxSkip
+                && Logic.Instance.TryReuseOcrResult()) return;
+
+            Logic.Instance.InvalidateOcrReuse();
             _frameChangeDetector.MarkOcrFrame();
             _lastOcrStartTime = DateTime.UtcNow;
+            _lastOcrMethod = ocrMethod;
+            _lastOcrLanguage = ocrLanguage;
 
             Stopwatch stopwatch = Stopwatch.StartNew();
             SetOCRCheckIsWanted(false);
@@ -697,10 +721,16 @@ namespace RSTGameTranslation
 
             // The overlay background colour is sampled from this frame once its OCR result is in.
             // Clone() copies lazily, so this costs almost nothing unless the frame is sampled.
-            Logic.Instance.SetOcrSourceFrame(ConfigManager.Instance.IsAutoSetOverlayBackground() ? (Bitmap)image.Clone() : null);
+            Logic.Instance.SetOcrSourceFrame(ConfigManager.Instance.IsAutoSetOverlayBackground() &&
+                !ConfigManager.Instance.IsNearbyTranslationEnabled() ? (Bitmap)image.Clone() : null);
 
             string sourceLanguage = (sourceLanguageComboBox?.SelectedItem as ComboBoxItem)?.Content?.ToString()!;
-            if (GetSelectedOcrMethod() == "Windows OCR")
+            if (GetSelectedOcrMethod() == RapidOCRManager.Method)
+            {
+                // Capture owns image; the asynchronous worker owns a separate snapshot.
+                Logic.Instance.ProcessWithRapidOCR((Bitmap)image.Clone());
+            }
+            else if (GetSelectedOcrMethod() == "Windows OCR")
             {
                 Logic.Instance.ProcessWithWindowsOCR(image, sourceLanguage);
             }
@@ -1364,7 +1394,7 @@ namespace RSTGameTranslation
             LoadLanguageSettingsFromConfig();
 
             // status OCR
-            if(savedOcrMethod == "Windows OCR" || savedOcrMethod == "OneOCR")
+            if(savedOcrMethod == "Windows OCR" || savedOcrMethod == "OneOCR" || savedOcrMethod == RapidOCRManager.Method)
             {
                 OCRStatusEllipse.Fill = new SolidColorBrush(Color.FromRgb(20, 180, 20)); // Green
                 OCRStatusText.Text = LocalizationManager.Instance.Strings["Btn_On"];
@@ -1504,8 +1534,19 @@ namespace RSTGameTranslation
             int physY = captureRect.Top;
             int physW = Math.Max(1, captureRect.Width);
             int physH = Math.Max(1, captureRect.Height);
+            if (ConfigManager.Instance.IsNearbyTranslationEnabled())
+            {
+                // The capture can be a narrow subtitle strip. Give annotations space
+                // around it without expanding OCR or changing capture-relative boxes.
+                var screen = System.Windows.Forms.Screen.FromRectangle(captureRect).Bounds;
+                physX = screen.Left;
+                physY = screen.Top;
+                physW = screen.Width;
+                physH = screen.Height;
+            }
             
             DpiHelper.PositionWindowPhysical(hwnd, physX, physY, physW, physH);
+            MonitorWindow.Instance.SetCaptureOffset(captureRect.Left - physX, captureRect.Top - physY);
 
             // Save physical position for future reference
             monitorWindowLeft = physX;
@@ -1616,7 +1657,14 @@ namespace RSTGameTranslation
 
         private void OnUpdateTick(object? sender, EventArgs e)
         {
-
+            var interval = TimeSpan.FromMilliseconds(GetIsStarted() ? 125 : 250);
+            if (_captureTimer.Interval != interval) _captureTimer.Interval = interval;
+            // Keep overlays following a moved window without reading pixels while idle/busy.
+            if (!ShouldPerformOcrNow())
+            {
+                UpdateCaptureRect();
+                return;
+            }
             PerformCapture();
         }
 
@@ -3904,7 +3952,7 @@ namespace RSTGameTranslation
                 ConfigManager.Instance.SetLanguageInterface(languageCode);
                 // status OCR
                 string savedOcrMethod = ConfigManager.Instance.GetOcrMethod();
-                if(savedOcrMethod == "Windows OCR" || savedOcrMethod == "OneOCR")
+                if(savedOcrMethod == "Windows OCR" || savedOcrMethod == "OneOCR" || savedOcrMethod == RapidOCRManager.Method)
                 {
                     OCRStatusEllipse.Fill = new SolidColorBrush(Color.FromRgb(20, 180, 20)); // Green
                     OCRStatusText.Text = LocalizationManager.Instance.Strings["Btn_On"];

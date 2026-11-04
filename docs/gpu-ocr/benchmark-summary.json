@@ -1,0 +1,42 @@
+{
+  "queue_latest_median_ms": {
+    "before": 2013.74190000206,
+    "after": 130.28659999690717
+  },
+  "layout": [
+    {
+      "blocks": 5,
+      "before_ms": 35.8825,
+      "after_ms": 0.9455
+    },
+    {
+      "blocks": 16,
+      "before_ms": 74.17224999999999,
+      "after_ms": 2.9075499999999996
+    },
+    {
+      "blocks": 40,
+      "before_ms": 183.33145000000002,
+      "after_ms": 13.88805
+    }
+  ],
+  "ocr": [
+    {
+      "size": "1000x180",
+      "before_ms": 26.80875,
+      "after_ms": 25.16255,
+      "before_allocated_bytes": 728280,
+      "after_allocated_bytes": 12052
+    },
+    {
+      "size": "3840x2160",
+      "before_ms": 206.8315,
+      "after_ms": 210.22785,
+      "before_allocated_bytes": 33185368,
+      "after_allocated_bytes": 8164
+    }
+  ],
+  "real_translation_requests": 54,
+  "real_translation_segments": 69,
+  "random_layout_placements": 960
+}
